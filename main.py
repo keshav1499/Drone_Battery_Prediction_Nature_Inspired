@@ -1,10 +1,44 @@
 from pymavlink import mavutil
 import time
+import serial
+import re
 
 from config import SERIAL_PORT, BAUD_RATE, SEND_TO_GOOGLE, SEND_INTERVAL, WEATHER_UPDATE_INTERVAL
 from weather import get_weather_data
 from battery_prediction import calculate_battery_prediction
 from google_sheets import send_to_google
+
+# Setup LoRa serial
+try:
+    lora_serial = serial.Serial("/dev/ttyUSB0", baudrate=115200, timeout=0.1)
+    print("LoRa serial connected on /dev/ttyUSB0")
+except Exception as e:
+    lora_serial = None
+    print(f"[LoRa Serial Error] {e}")
+
+# Attempt to read a DHT line from LoRa
+def read_dht_from_lora():
+    if not lora_serial:
+        return None, None
+    try:
+        line = lora_serial.readline().decode(errors='ignore').strip()
+        match = re.match(r"<DHT11:TEMP=([-+]?[0-9]*\.?[0-9]+),HUM=([-+]?[0-9]*\.?[0-9]+)>", line)
+        if match:
+            return float(match.group(1)), float(match.group(2))
+    except Exception:
+        pass
+    return None, None
+
+# Try for up to 1 second to get latest sensor values
+def get_latest_dht():
+    start = time.time()
+    while time.time() - start < 4.0:
+        temp, hum = read_dht_from_lora()
+        if temp is not None and hum is not None:
+            print(f"[LoRa DHT11] Temp={temp}, Humidity={hum}")
+            return temp, hum
+    print("[LoRa DHT11] No valid DHT reading received in 4s window.")
+    return None, None
 
 def main():
     print(f"Connecting to {SERIAL_PORT} at {BAUD_RATE} baud...")
@@ -47,7 +81,8 @@ def main():
 
                 current_time = time.time()
                 if current_time - last_weather_update >= WEATHER_UPDATE_INTERVAL and data['lat'] and data['lon']:
-                    weather = get_weather_data(data['lat'], data['lon'])
+                    dht_temp, dht_hum = get_latest_dht()
+                    weather = get_weather_data(data['lat'], data['lon'], dht_temp, dht_hum)
                     if weather:
                         data.update(weather)
                         last_weather_update = current_time
@@ -83,3 +118,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
