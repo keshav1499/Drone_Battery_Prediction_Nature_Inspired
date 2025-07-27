@@ -16,41 +16,29 @@ except Exception as e:
     lora_serial = None
     print(f"[LoRa Serial Error] {e}")
 
-# Read LoRa sensor packet
-def read_sensor_from_lora():
+# Attempt to read a DHT line from LoRa
+def read_dht_from_lora():
     if not lora_serial:
-        return None, None, None
+        return None, None
     try:
         line = lora_serial.readline().decode(errors='ignore').strip()
-        match = re.match(r"<SENSORS:TEMP=([-+]?[0-9]*\.?[0-9]+),HUM=([-+]?[0-9]*\.?[0-9]+),ADC=(\d+)>", line)
+        match = re.match(r"<DHT11:TEMP=([-+]?[0-9]*\.?[0-9]+),HUM=([-+]?[0-9]*\.?[0-9]+)>", line)
         if match:
-            temp = float(match.group(1))
-            hum = float(match.group(2))
-            adc = int(match.group(3))
-            return temp, hum, adc
+            return float(match.group(1)), float(match.group(2))
     except Exception:
         pass
-    return None, None, None
+    return None, None
 
-def get_latest_sensor_readings():
+# Try for up to 4 seconds to get latest sensor values
+def get_latest_dht():
     start = time.time()
     while time.time() - start < 4.0:
-        temp, hum, adc = read_sensor_from_lora()
-        if temp is not None and hum is not None and adc is not None:
-            print(f"[LoRa SENSORS] Temp={temp}, Humidity={hum}, ADC={adc}")
-            return temp, hum, adc
-    print("[LoRa SENSORS] No valid sensor reading received in 4s window.")
-    return None, None, None
-
-def calculate_voltage_from_adc(adc_raw):
-    return adc_raw * (16.5 / 1023.0)
-
-def calculate_battery_percent(adc_raw):
-    voltage = calculate_voltage_from_adc(adc_raw)
-    percent = ((voltage - 12.8) / (16.5 - 12.8)) * 90
-    percent = max(0, min(90, percent))
-    print(f"[Battery Override] ADC={adc_raw} → Voltage={voltage:.2f}V → Battery={percent:.1f}%")
-    return voltage, round(percent, 1)
+        temp, hum = read_dht_from_lora()
+        if temp is not None and hum is not None:
+            print(f"[LoRa DHT11] Temp={temp}, Humidity={hum}")
+            return temp, hum
+    print("[LoRa DHT11] No valid DHT reading received in 5s window.")
+    return None, None
 
 def main():
     print(f"Connecting to {SERIAL_PORT} at {BAUD_RATE} baud...")
@@ -76,7 +64,7 @@ def main():
     last_sent_time = time.time()
     last_weather_update = 0
     last_prediction_time = 0
-    prediction_interval = 15
+    prediction_interval = 15  # seconds
 
     while True:
         try:
@@ -93,17 +81,12 @@ def main():
 
                 current_time = time.time()
                 if current_time - last_weather_update >= WEATHER_UPDATE_INTERVAL and data['lat'] and data['lon']:
-                    temp, hum, adc = get_latest_sensor_readings()
-                    if temp is not None and hum is not None:
-                        weather = get_weather_data(data['lat'], data['lon'], temp, hum)
-                        if weather:
-                            data.update(weather)
-                            print("Updated weather data")
-                    if adc is not None:
-                        voltage, battery_percent = calculate_battery_percent(adc)
-                        data['voltage'] = round(voltage, 2)
-                        data['battery'] = battery_percent
-                    last_weather_update = current_time
+                    dht_temp, dht_hum = get_latest_dht()
+                    weather = get_weather_data(data['lat'], data['lon'], dht_temp, dht_hum)
+                    if weather:
+                        data.update(weather)
+                        last_weather_update = current_time
+                        print("Updated weather data")
 
             elif msg_type == 'ATTITUDE':
                 data['roll'] = round(msg.roll, 3)
@@ -116,8 +99,9 @@ def main():
                 data['heading'] = msg.heading
 
             elif msg_type == 'SYS_STATUS':
+                data['voltage'] = msg.voltage_battery / 1000.0
                 data['current'] = msg.current_battery / 100.0
-                # Do NOT override voltage and battery if LoRa ADC data is available
+                data['battery'] = msg.battery_remaining
 
             elif msg_type == 'AHRS':
                 data['error_rp'] = round(msg.error_rp, 4)
@@ -133,7 +117,7 @@ def main():
                 calculate_battery_prediction(data)
                 last_prediction_time = time.time()
 
-            # Send data to Google Sheets
+            # Data logging
             if time.time() - last_sent_time >= SEND_INTERVAL:
                 if all(str(data[k]) != '' for k in ['lat', 'lon', 'alt']):
                     if SEND_TO_GOOGLE:
@@ -149,4 +133,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
