@@ -61,7 +61,7 @@ serial_drone_data/
 
 ## 💡 Use Case
 
-> Ideal for **field missions**, **aerial surveys**, or **remote drone ops**, where logging telemetry + environmental data in one place is crucial.
+> Ideal for **field missions**, **aerial surveys**, or **remote drone ops**, where logging telemetry + environmental data in one place is crucial. Proper battery prediction with considering environment influence on battery has been implemented.
 
 ---
 
